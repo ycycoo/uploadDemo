@@ -2,13 +2,12 @@ package com.controller;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.io.RandomAccessFile;
 import java.net.URLDecoder;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedList;
@@ -17,7 +16,6 @@ import java.util.List;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
-import org.codehaus.jackson.annotate.JsonCreator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
@@ -105,6 +103,7 @@ public class FileController {
 					public void run() {
 						try {
 							mergeFile(filechunks, fileName);
+//							mergeFileWithChannel(filechunks, fileName);
 							filechunks.clear();
 						} catch (Exception e) {
 							e.printStackTrace();
@@ -158,6 +157,47 @@ public class FileController {
 		logger.info("close out stream,merge chunk file spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
 		outStream.flush();
 		outStream.close();
+	}
+	
+	
+	protected void mergeFileWithChannel(List<FileChunk> filechunks,
+			String originName) throws IOException {
+		long startTime = System.currentTimeMillis();
+
+		FileOutputStream fout = new FileOutputStream(tempPath + originName);
+
+		for (FileChunk chunk : filechunks) {
+			logger.info("start merge chunk: " + chunk.getName());
+			try {
+
+				FileInputStream fin = new FileInputStream(new File(tempPath
+						+ chunk.getName()));
+				FileChannel fcin = fin.getChannel();
+				FileChannel fcout = fout.getChannel();
+
+				ByteBuffer buffer = ByteBuffer.allocate(1024);
+
+				while (true) {
+					buffer.clear();
+
+					int r = fcin.read(buffer);
+
+					if (r == -1) {
+						break;
+					}
+//					logger.info("write buffer: " + buffer);
+					buffer.flip();
+					fcout.write(buffer);
+				}
+			} catch (Exception e) {
+				logger.error("merge error", e);
+				e.printStackTrace();
+			}
+		}
+		fout.flush();
+		fout.close();
+		logger.info("close out stream,use NIO merge chunk file spend: "
+				+ (System.currentTimeMillis() - startTime) / 1000 + " s");
 	}
 
 	/**
