@@ -1,22 +1,35 @@
 package com.controller;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.util.Iterator;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.RandomAccessFile;
+import java.net.URLDecoder;
+import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.LinkedList;
+import java.util.List;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.codehaus.jackson.annotate.JsonCreator;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.FileCopyUtils;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
 
+import com.model.FileChunk;
 import com.model.FileMeta;
 
 @Controller
@@ -25,7 +38,10 @@ public class FileController {
 
 	LinkedList<FileMeta> files = new LinkedList<FileMeta>();
 	FileMeta fileMeta = null;
-
+	
+	final List<FileChunk> filechunks = new ArrayList<FileChunk>();
+	
+	String tempPath = "D:/temp/";
 	/***************************************************
 	 * URL: /rest/controller/upload upload(): receives files
 	 * 
@@ -34,55 +50,137 @@ public class FileController {
 	 * @param response
 	 *            : HttpServletResponse auto passed
 	 * @return LinkedList<FileMeta> as json format
+	 * @throws Exception
 	 ****************************************************/
 	@RequestMapping(value = "/upload", method = RequestMethod.POST)
 	public @ResponseBody
-	LinkedList<FileMeta> upload(MultipartHttpServletRequest request,
-			HttpServletResponse response) {
-
+	FileChunk upload(
+			MultipartHttpServletRequest request,
+			HttpServletResponse response,
+			@RequestParam(value = "total", required = false, defaultValue = "-1") int chunks,
+			@RequestParam(value = "curIndex", required = false, defaultValue = "-1") int chunk)
+			throws Exception {
+		request.setCharacterEncoding("UTF-8");
 		response.setHeader("Access-Control-Allow-Origin", "*");
-		// 1. build an iterator
-		Iterator<String> itr = request.getFileNames();
-		MultipartFile mpf = null;
+		MultipartFile mpf = request.getFile("files[]");
+		String disposition = request.getHeader("Content-Disposition");
+		String content_range = request.getHeader("Content-Range");
+		String ContentLength = request.getHeader("Content-Length");
+		String pos[] = null;
+		long startPos = 0;
+		long endPos = 0;
+		long totalSize = 0;
+		
+		//分块上传
+		if (null != content_range) {
+			final long startTime = System.currentTimeMillis();
+			pos = content_range.replaceAll("bytes ", "").split("/")[0]
+					.split("-");
+			startPos = Long.valueOf(pos[0]);
+			endPos = Long.valueOf(pos[1]);
+			totalSize = Long.valueOf(content_range.replaceAll("bytes ", "")
+					.split("/")[1]);
+			final String fileName = URLDecoder.decode(getFilename(disposition), "UTF-8");
+			
+			System.out.println("disposition " + disposition + "content_range "
+					+ content_range + "fileName: " + fileName + ",ContentLength: "
+					+ ContentLength);
+			boolean finished = addChunkFile(mpf, startPos, endPos, totalSize,
+					fileName, tempPath);
+			FileChunk fileChunk = new FileChunk();
+			fileChunk.setName(fileName + startPos);
+			fileChunk.setSize(endPos - startPos);
+			fileChunk.setType(mpf.getContentType());
+			fileChunk.setOriginName(fileName);
+		    filechunks.add(fileChunk);
+			
+			
+			if (finished) {
+				System.out.println("upload chunk finished,spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
+				Thread tmpThread = new Thread(new Runnable() {
+					@Override
+					public void run() {
+						try {
+							mergeFile(filechunks, fileName);
+							filechunks.clear();
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+					}
+				});
+				tmpThread.setName("merge-"
+						+ Long.toHexString(System.currentTimeMillis()));
+				tmpThread.start();
+			}
+			return fileChunk;
+			
+		}
+		//单独上传
+		else {
+			String uniqueFileName = mpf.getOriginalFilename();
+			FileCopyUtils.copy(mpf.getBytes(), new FileOutputStream(tempPath+ uniqueFileName));
+			FileChunk fileChunk = new FileChunk();
+			fileChunk.setName(uniqueFileName);
+			fileChunk.setSize(Long.valueOf(ContentLength));
+			fileChunk.setType(mpf.getContentType());
+			fileChunk.setOriginName(uniqueFileName);
+			return fileChunk;
+		}
 
-		// 2. get each file
-		while (itr.hasNext()) {
+	}
 
-			// 2.1 get next MultipartFile
-			mpf = request.getFile(itr.next());
-			System.out.println(mpf.getOriginalFilename() + " uploaded! "
-					+ files.size());
-
-			// 2.2 if files > 10 remove the first from the list
-			if (files.size() >= 10)
-				files.pop();
-
-			// 2.3 create new fileMeta
-			fileMeta = new FileMeta();
-			fileMeta.setFileName(mpf.getOriginalFilename());
-			fileMeta.setFileSize(mpf.getSize() / 1024 + " Kb");
-			fileMeta.setFileType(mpf.getContentType());
-
+	/**
+	 * 合并文件
+	 * @param filechunks
+	 * @param originName 
+	 * @throws IOException 
+	 */
+	protected void mergeFile(List<FileChunk> filechunks, String originName) throws IOException {
+		FileOutputStream outStream = new FileOutputStream(tempPath+originName);
+		long startTime = System.currentTimeMillis();
+		for (FileChunk chunk : filechunks) {
+			System.out.println("start merge chunk: " + chunk.getName());
 			try {
-				fileMeta.setBytes(mpf.getBytes());
-
-				// copy file to local disk (make sure the path
-				// "e.g. D:/temp/files" exists)
-				FileCopyUtils.copy(mpf.getBytes(), new FileOutputStream(
-						"D:/temp/" + mpf.getOriginalFilename()));
-
-			} catch (IOException e) {
-				// TODO Auto-generated catch block
+				FileInputStream in = new FileInputStream(new File(tempPath + chunk.getName()));
+				int len = -1;
+				byte[] buff = new byte[1024];
+				while ((len = in.read(buff)) != -1) {
+					outStream.write(buff, 0, len);
+				}
+				in.close();
+			} catch (Exception e) {
 				e.printStackTrace();
 			}
-			// 2.4 add to files
-			files.add(fileMeta);
-
 		}
-		// result will be like this
-		// [{"fileName":"app_engine-85x77.png","fileSize":"8 Kb","fileType":"image/png"},...]
-		return files;
+		System.out.println("close out stream,merge chunk file spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
+		outStream.flush();
+		outStream.close();
+	}
 
+	/**
+	 * 
+	 * @param mpf
+	 * @param startPos
+	 * @param endPos
+	 * @param totalSize
+	 * @param fileName
+	 * @param tempPath
+	 * @return
+	 */
+	private boolean addChunkFile(MultipartFile mpf, long startPos, long endPos,
+			long totalSize, String fileName, String tempPath) {
+		try {
+			FileCopyUtils.copy(mpf.getBytes(), new FileOutputStream(tempPath
+					+ fileName + startPos));
+
+		//所有chunk块上传完
+			if (endPos == totalSize - 1)
+				return true;
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return false;
 	}
 
 	/***************************************************
@@ -94,7 +192,7 @@ public class FileController {
 	 *            : value from the URL
 	 * @return void
 	 ****************************************************/
-	@RequestMapping(value = "/get/{value}", method = RequestMethod.GET,headers = "Access-Control-Allow-Origin=*")
+	@RequestMapping(value = "/get/{value}", method = RequestMethod.GET, headers = "Access-Control-Allow-Origin=*")
 	public void get(HttpServletResponse response, @PathVariable String value) {
 		FileMeta getFile = files.get(Integer.parseInt(value));
 		try {
@@ -107,17 +205,67 @@ public class FileController {
 			e.printStackTrace();
 		}
 	}
+
+	@RequestMapping(value = "/upload1", method = RequestMethod.POST)
+	public void uploadMedia(@RequestBody MultipartFile file,
+			@RequestParam String name,
+			@RequestParam(required = false, defaultValue = "-1") int chunks,
+			@RequestParam(required = false, defaultValue = "-1") int chunk) {
+		System.out.println("chunck: " + chunk);
+		System.out.println("chuncks: " + chunks);
+
+	}
 	
-	@RequestMapping(value = "/res",method = RequestMethod.GET)
-	public void responseStr(HttpServletResponse response,HttpServletRequest request){
-		
-		try {
-			response.getWriter().print("hello");
-			response.setHeader("Access-Control-Allow-Origin", "*");
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+	@RequestMapping(value = "/getFile", method = RequestMethod.GET)
+	@ResponseBody
+	public FileChunk getFile(HttpServletResponse response, HttpServletRequest request) {
+
+			String fileName = request.getParameter("file");
+			File file = new File(tempPath +  fileName);
+			if(file.exists()){
+				FileChunk chunk = new FileChunk();
+				chunk.setName(fileName);
+				chunk.setSize(file.length());
+				return chunk;
+			}
+			return null;
+	}
+
+	public static byte[] create(String filename) throws Exception {
+		InputStream fis = new FileInputStream(filename);
+		byte[] buf = new byte[1024];
+		MessageDigest com = MessageDigest.getInstance("MD5");
+		int num;
+		do {
+			num = fis.read(buf);
+			if (num > 0) {
+				com.update(buf, 0, num);
+			}
+		} while (num != -1);
+
+		fis.close();
+		return com.digest();
+	}
+
+	public static String getMD5(String filename) throws Exception {
+		byte[] b = create(filename);
+		String result = "";
+		for (int i = 0; i < b.length; i++) {
+			result += Integer.toString((b[i] & 0xff) + 0x100, 16).substring(1);
 		}
+		return result;
+	}
+
+	private static String getFilename(String name) {
+		for (String cd : name.split(";")) {
+			if (cd.trim().startsWith("filename")) {
+				String filename = cd.substring(cd.indexOf('=') + 1).trim()
+						.replace("\"", "");
+				return filename.substring(filename.lastIndexOf('/') + 1)
+						.substring(filename.lastIndexOf('\\') + 1); // MSIE fix.
+			}
+		}
+		return null;
 	}
 
 }

@@ -16,15 +16,14 @@
 
 <!-- we code these -->
 <link href="css/dropzone.css" type="text/css" rel="stylesheet" />
-<script src="js/myuploadfunction.js"></script>
 </head>
 
 <body>
 <h1>Spring MVC - jQuery File Upload</h1>
 <div style="width:500px;padding:20px">
-
+		设置chunk段大小:
+	<input id="chunkSize" type="text" value="2"/>MB
 	<input id="fileupload" type="file" name="files[]" data-url="rest/controller/upload" multiple>
-	
 	<div id="dropzone" class="fade well">Drop files here</div>
 	
 	<div id="progress" class="progress">
@@ -39,7 +38,53 @@
 			<th>Download</th>
 		</tr>
 	</table>
-	
+	<script>
+$(function () {
+	var chunkSize = $("#chunkSize").val();
+    $('#fileupload').fileupload({
+    	
+        dataType: 'json',
+        maxChunkSize: chunkSize*1024*1024, // * MB
+        progressall: function (e, data) {
+            var progress = parseInt(data.loaded / data.total * 100, 10);
+            $('#progress .bar').css(
+                'width',
+                progress + '%'
+            );
+        },
+    
+        done: function (e, data) {
+            $.each(data.result, function (index, file) {
+            	/* console.log(data.result);
+            	console.log(data.textStatus);
+            	console.log(data.jqXHR); */
+               // $('<p/>').text(file.originName).appendTo(document.body);
+            });
+        },
+        
+/*         add: function (e, data) {
+            var that = this;
+            $.getJSON('rest/controller/getFile', {file: data.files[0].name}, function (result) {
+            	console.log("resuming upload" + result);
+                var file = result;
+                data.uploadedBytes = file && file.size;
+                $.blueimp.fileupload.prototype
+                    .options.add.call(that, e, data);
+            });
+        } */
+        
+    })
+    .on('fileuploadchunksend', function (e, data) {})
+    .on('fileuploadchunkdone', function (e, data) {})
+    .on('fileuploadchunkfail', function (e, data) {})
+    .on('fileuploaddone', function (e, data) {
+    	console.log("fileuploaddone" + data.result);
+    	 //$('<p/>').text(data.result.name).appendTo(document.body);
+    	
+    })
+    .on('fileuploadchunkalways', function (e, data) {console.log("fileuploadchunkalways");});
+});
+</script>
 </div>
 </body> 
 </html>
