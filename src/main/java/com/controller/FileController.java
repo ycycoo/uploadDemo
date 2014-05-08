@@ -18,6 +18,8 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
 import org.codehaus.jackson.annotate.JsonCreator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.FileCopyUtils;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -36,6 +38,7 @@ import com.model.FileMeta;
 @RequestMapping("/controller")
 public class FileController {
 
+	final Logger logger = LoggerFactory.getLogger(FileController.class);
 	LinkedList<FileMeta> files = new LinkedList<FileMeta>();
 	FileMeta fileMeta = null;
 	
@@ -71,7 +74,7 @@ public class FileController {
 		long endPos = 0;
 		long totalSize = 0;
 		
-		//分块上传
+		//鍒嗗潡涓婁紶
 		if (null != content_range) {
 			final long startTime = System.currentTimeMillis();
 			pos = content_range.replaceAll("bytes ", "").split("/")[0]
@@ -82,7 +85,7 @@ public class FileController {
 					.split("/")[1]);
 			final String fileName = URLDecoder.decode(getFilename(disposition), "UTF-8");
 			
-			System.out.println("disposition " + disposition + "content_range "
+			logger.info("disposition " + disposition + "content_range "
 					+ content_range + "fileName: " + fileName + ",ContentLength: "
 					+ ContentLength);
 			boolean finished = addChunkFile(mpf, startPos, endPos, totalSize,
@@ -96,7 +99,7 @@ public class FileController {
 			
 			
 			if (finished) {
-				System.out.println("upload chunk finished,spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
+				logger.info("upload chunk finished,spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
 				Thread tmpThread = new Thread(new Runnable() {
 					@Override
 					public void run() {
@@ -115,7 +118,7 @@ public class FileController {
 			return fileChunk;
 			
 		}
-		//单独上传
+		//鍗曠嫭涓婁紶
 		else {
 			String uniqueFileName = mpf.getOriginalFilename();
 			FileCopyUtils.copy(mpf.getBytes(), new FileOutputStream(tempPath+ uniqueFileName));
@@ -130,7 +133,7 @@ public class FileController {
 	}
 
 	/**
-	 * 合并文件
+	 * 鍚堝苟鏂囦欢
 	 * @param filechunks
 	 * @param originName 
 	 * @throws IOException 
@@ -139,7 +142,7 @@ public class FileController {
 		FileOutputStream outStream = new FileOutputStream(tempPath+originName);
 		long startTime = System.currentTimeMillis();
 		for (FileChunk chunk : filechunks) {
-			System.out.println("start merge chunk: " + chunk.getName());
+			logger.info("start merge chunk: " + chunk.getName());
 			try {
 				FileInputStream in = new FileInputStream(new File(tempPath + chunk.getName()));
 				int len = -1;
@@ -152,7 +155,7 @@ public class FileController {
 				e.printStackTrace();
 			}
 		}
-		System.out.println("close out stream,merge chunk file spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
+		logger.info("close out stream,merge chunk file spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
 		outStream.flush();
 		outStream.close();
 	}
@@ -173,7 +176,7 @@ public class FileController {
 			FileCopyUtils.copy(mpf.getBytes(), new FileOutputStream(tempPath
 					+ fileName + startPos));
 
-		//所有chunk块上传完
+		//鎵�湁chunk鍧椾笂浼犲畬
 			if (endPos == totalSize - 1)
 				return true;
 
@@ -211,8 +214,8 @@ public class FileController {
 			@RequestParam String name,
 			@RequestParam(required = false, defaultValue = "-1") int chunks,
 			@RequestParam(required = false, defaultValue = "-1") int chunk) {
-		System.out.println("chunck: " + chunk);
-		System.out.println("chuncks: " + chunks);
+		logger.info("chunck: " + chunk);
+		logger.info("chuncks: " + chunks);
 
 	}
 	
