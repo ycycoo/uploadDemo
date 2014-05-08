@@ -3,7 +3,8 @@ uploadDemo
 
 A java upload demo based on spring and jquery file upload
 
-Useage
+Usage
 ==========
 
 mvn jetty:run
+mvn tomcat7:deploy
