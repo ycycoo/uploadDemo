@@ -12,10 +12,16 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import net.sf.json.JSONObject;
+import net.sf.json.util.JSONBuilder;
+
+import org.codehaus.jackson.annotate.JsonBackReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Controller;
@@ -40,7 +46,7 @@ public class FileController {
 	LinkedList<FileMeta> files = new LinkedList<FileMeta>();
 	FileMeta fileMeta = null;
 	
-	final List<FileChunk> filechunks = new ArrayList<FileChunk>();
+	ConcurrentHashMap<String, ArrayList<FileChunk>> listMap = new ConcurrentHashMap<String, ArrayList<FileChunk>>();
 	
 	String tempPath = "D:/temp/";
 	/***************************************************
@@ -59,6 +65,7 @@ public class FileController {
 			MultipartHttpServletRequest request,
 			HttpServletResponse response,
 			@RequestParam(value = "total", required = false, defaultValue = "-1") int chunks,
+			@RequestParam(value = "userId", required = false, defaultValue = "-1") final String userId,
 			@RequestParam(value = "curIndex", required = false, defaultValue = "-1") int chunk)
 			throws Exception {
 		request.setCharacterEncoding("UTF-8");
@@ -71,53 +78,62 @@ public class FileController {
 		long startPos = 0;
 		long endPos = 0;
 		long totalSize = 0;
+		logger.info("userId: " + userId);
+
+		ArrayList<FileChunk> filechunks = null;
 		
-		//鍒嗗潡涓婁紶
+		//对分块上传文件的处理
 		if (null != content_range) {
-			final long startTime = System.currentTimeMillis();
-			pos = content_range.replaceAll("bytes ", "").split("/")[0]
-					.split("-");
-			startPos = Long.valueOf(pos[0]);
-			endPos = Long.valueOf(pos[1]);
-			totalSize = Long.valueOf(content_range.replaceAll("bytes ", "")
-					.split("/")[1]);
-			final String fileName = URLDecoder.decode(getFilename(disposition), "UTF-8");
 			
-			logger.info("disposition " + disposition + "content_range "
-					+ content_range + "fileName: " + fileName + ",ContentLength: "
-					+ ContentLength);
-			boolean finished = addChunkFile(mpf, startPos, endPos, totalSize,
-					fileName, tempPath);
-			FileChunk fileChunk = new FileChunk();
-			fileChunk.setName(fileName + startPos);
-			fileChunk.setSize(endPos - startPos);
-			fileChunk.setType(mpf.getContentType());
-			fileChunk.setOriginName(fileName);
-		    filechunks.add(fileChunk);
-			
-			
-			if (finished) {
-				logger.info("upload chunk finished,spend: " + (System.currentTimeMillis()-startTime)/1000 + " s");
-				Thread tmpThread = new Thread(new Runnable() {
-					@Override
-					public void run() {
-						try {
-							mergeFile(filechunks, fileName);
-//							mergeFileWithChannel(filechunks, fileName);
-							filechunks.clear();
-						} catch (Exception e) {
-							e.printStackTrace();
-						}
-					}
-				});
-				tmpThread.setName("merge-"
-						+ Long.toHexString(System.currentTimeMillis()));
-				tmpThread.start();
+			if(!listMap.containsKey(userId)){
+				filechunks = new ArrayList<FileChunk>();
 			}
-			return fileChunk;
+			else{
+				filechunks = listMap.get(userId);
+			}
+				pos = content_range.replaceAll("bytes ", "").split("/")[0]
+						.split("-");
+				startPos = Long.valueOf(pos[0]);
+				endPos = Long.valueOf(pos[1]);
+				totalSize = Long.valueOf(content_range.replaceAll("bytes ", "")
+						.split("/")[1]);
+				final String fileName = URLDecoder.decode(getFilename(disposition), "UTF-8");
+//				
+//				logger.info("disposition " + disposition + "content_range "
+//						+ content_range + "fileName: " + fileName + ",ContentLength: "
+//						+ ContentLength);
+				boolean finished = addChunkFile(mpf, startPos, endPos, totalSize,
+						fileName, tempPath);
+				FileChunk fileChunk = new FileChunk();
+				fileChunk.setName(fileName + startPos);
+				fileChunk.setSize(endPos - startPos);
+				fileChunk.setType(mpf.getContentType());
+				fileChunk.setOriginName(fileName);
+				filechunks.add(fileChunk);
+			    
+			    listMap.putIfAbsent(userId, filechunks);
+			    
+				if (finished) {
+					logger.info("upload chunk finished,begin merge: " + userId);
+					Thread tmpThread = new Thread(new Runnable() {
+						@Override
+						public void run() {
+							try {
+								mergeFile(listMap.get(userId), fileName, userId);
+//								mergeFileWithChannel(filechunks, fileName);
+								listMap.get(userId).clear();
+							} catch (Exception e) {
+								logger.error("mergeFile error", e);
+							}
+						}
+					});
+					tmpThread.setName("merge-uid"+ userId);
+					tmpThread.start();
+				}
+				return fileChunk;
 			
 		}
-		//鍗曠嫭涓婁紶
+		//对非分块文件处理
 		else {
 			String uniqueFileName = mpf.getOriginalFilename();
 			FileCopyUtils.copy(mpf.getBytes(), new FileOutputStream(tempPath+ uniqueFileName));
@@ -132,16 +148,17 @@ public class FileController {
 	}
 
 	/**
-	 * 鍚堝苟鏂囦欢
+	 * 合并文件
 	 * @param filechunks
 	 * @param originName 
+	 * @param uid TODO
 	 * @throws IOException 
 	 */
-	protected void mergeFile(List<FileChunk> filechunks, String originName) throws IOException {
+	protected void mergeFile(List<FileChunk> filechunks, String originName, String uid) throws IOException {
 		FileOutputStream outStream = new FileOutputStream(tempPath+originName);
 		long startTime = System.currentTimeMillis();
 		for (FileChunk chunk : filechunks) {
-			logger.info("start merge chunk: " + chunk.getName());
+//			logger.info("start merge chunk: " + chunk.getName());
 			try {
 				FileInputStream in = new FileInputStream(new File(tempPath + chunk.getName()));
 				int len = -1;
@@ -159,7 +176,12 @@ public class FileController {
 		outStream.close();
 	}
 	
-	
+	/**
+	 * NIO 合并文件
+	 * @param filechunks
+	 * @param originName
+	 * @throws IOException
+	 */
 	protected void mergeFileWithChannel(List<FileChunk> filechunks,
 			String originName) throws IOException {
 		long startTime = System.currentTimeMillis();
@@ -249,29 +271,24 @@ public class FileController {
 		}
 	}
 
-	@RequestMapping(value = "/upload1", method = RequestMethod.POST)
-	public void uploadMedia(@RequestBody MultipartFile file,
-			@RequestParam String name,
-			@RequestParam(required = false, defaultValue = "-1") int chunks,
-			@RequestParam(required = false, defaultValue = "-1") int chunk) {
-		logger.info("chunck: " + chunk);
-		logger.info("chuncks: " + chunks);
-
-	}
 	
 	@RequestMapping(value = "/getFile", method = RequestMethod.GET)
 	@ResponseBody
-	public FileChunk getFile(HttpServletResponse response, HttpServletRequest request) {
-
-			String fileName = request.getParameter("file");
-			File file = new File(tempPath +  fileName);
-			if(file.exists()){
-				FileChunk chunk = new FileChunk();
-				chunk.setName(fileName);
-				chunk.setSize(file.length());
-				return chunk;
+	public String getFile(HttpServletResponse response,
+			HttpServletRequest request) {
+		JSONObject json = new JSONObject();
+		String fileName = request.getParameter("file");
+		File dir = new File(tempPath);
+		long alreadyUploadBytes = 0;
+		for (File f : dir.listFiles()) {
+			if (f.getName().startsWith(fileName)) {
+				alreadyUploadBytes = alreadyUploadBytes + f.length();
 			}
-			return null;
+			logger.info("alreadyUpload file: " + fileName);
+		}
+		logger.info("alreadyUploadBytes: " + alreadyUploadBytes);
+		json.put("size", alreadyUploadBytes);
+		return json.toString();
 	}
 
 	public static byte[] create(String filename) throws Exception {

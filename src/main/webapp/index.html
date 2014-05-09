@@ -8,6 +8,7 @@
 <script src="js/vendor/jquery.ui.widget.js"></script>
 <script src="js/jquery.iframe-transport.js"></script>
 <script src="js/jquery.fileupload.js"></script>
+<script src="js/md5/spark-md5.min.js"></script>
 
 
 <!-- bootstrap just to have good looking page -->
@@ -16,6 +17,7 @@
 
 <!-- we code these -->
 <link href="css/dropzone.css" type="text/css" rel="stylesheet" />
+<link href="css/style.css" type="text/css" rel="stylesheet" />
 </head>
 
 <body>
@@ -28,7 +30,7 @@
 	
 	<div id="progress" class="progress">
     	<div class="bar" style="width: 0%;"></div>
-	</div>
+	</div> 
 
 	<table id="uploaded-files" class="table">
 		<tr>
@@ -40,19 +42,35 @@
 	</table>
 	<script>
 $(function () {
-	var chunkSize = $("#chunkSize").val();
+	var chunkSize = document.getElementById("chunkSize").value;
+	var version = navigator.userAgent;//TODO 使用登陆用户uesrId
+	version = version.substring(version.length-10,version.length);
+	
+	var timestamp = Date.parse(new Date());  
+	console.log("version: " + version + ";chunkSize:" + chunkSize);
     $('#fileupload').fileupload({
-    	
         dataType: 'json',
-        maxChunkSize: chunkSize*1024*1024, // * MB
+        formData:[
+                   {
+                	   name: 'userId',
+                	   value: version + timestamp
+                   },
+                   {
+                       name: 'userName',
+                       value: 'eric'
+                   }
+               ],
+        acceptFileTypes:/(\.|\/)(gif|jpe?g|png)$/i,
+        maxFileSize:10*1024*1024,
+        maxChunkSize: 20*1024*1024, // * MB
         progressall: function (e, data) {
+        	console.log("data loaded: " + data.loaded + ",data total: " + data.total);
             var progress = parseInt(data.loaded / data.total * 100, 10);
             $('#progress .bar').css(
                 'width',
                 progress + '%'
             );
-        },
-    
+        }, 
         done: function (e, data) {
             $.each(data.result, function (index, file) {
             	/* console.log(data.result);
@@ -62,23 +80,43 @@ $(function () {
             });
         },
         
-/*         add: function (e, data) {
+/*          add: function (e, data) {
             var that = this;
+            console.log("add fileName: "  + data.files[0].name);
             $.getJSON('rest/controller/getFile', {file: data.files[0].name}, function (result) {
             	console.log("resuming upload" + result);
-                var file = result;
-                data.uploadedBytes = file && file.size;
+                var file = file &&result;
+                data.uploadedBytes = file.size;
                 $.blueimp.fileupload.prototype
                     .options.add.call(that, e, data);
             });
-        } */
+        }   */
         
     })
-    .on('fileuploadchunksend', function (e, data) {})
+    .on('fileuploadchunksend', function (e, data) {
+    	var chunckFile = data.files[0];
+    	console.log("chunk send" + chunckFile);
+    	
+    	//compute MD5 HASH
+    	var spark = new SparkMD5.ArrayBuffer();
+    	var fileReader = new FileReader();
+    	//fileReader.onload = function(e){
+    		//console.log("fr load.");
+    		 //spark.append(e.target.result); 
+    	//};
+    	//fileReader.readAsArrayBuffer(chunckFile);
+    	//console.log("computed hash", spark.end()); // compute hash
+    	
+    })
     .on('fileuploadchunkdone', function (e, data) {})
+    .on('fileuploadprogress', function (e, data) {
+    	 // Log the current bitrate for this upload:
+        console.log(data.bitrate);
+    })
+    .on('fileuploadchunkfail', function (e, data) {})
     .on('fileuploadchunkfail', function (e, data) {})
     .on('fileuploaddone', function (e, data) {
-    	console.log("fileuploaddone" + data.result);
+    	//console.log("fileuploaddone" + data.result);
     	 //$('<p/>').text(data.result.name).appendTo(document.body);
     	
     })
